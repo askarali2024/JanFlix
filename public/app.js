@@ -502,6 +502,8 @@ $('#qrBtn').addEventListener('click', async () => {
     const data = await res.json();
     $('#qrImage').src = data.qr;
     $('#qrUrl').textContent = data.url;
+    const alt = (data.all || []).filter((u) => u !== data.url);
+    $('#qrAlt').textContent = alt.length ? `Also reachable at: ${alt.join(' · ')}` : '';
     $('#qrModal').hidden = false;
   } catch {
     toast('Could not generate QR code');

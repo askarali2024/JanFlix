@@ -156,3 +156,24 @@ JanFlix/
 - Scans run in the background; the UI keeps working while a scan (and optional TMDB enrichment) is in progress.
 - The library is keyed by file path, so renaming a file makes it a "new" movie (and re-fetches metadata if TMDB is enabled).
 - Everything is served from your own machine — nothing leaves your LAN except optional TMDB API calls when a key is set.
+
+## 📶 Troubleshooting LAN / phone access
+
+JanFlix listens on **all interfaces** and prints every reachable LAN URL at startup (preferring your Wi-Fi/Ethernet interface over VPN and virtual adapters):
+
+```
+  ████ JanFlix ████
+  Streaming:   http://192.168.0.14:3000   (en0)
+  Local:       http://localhost:3000
+```
+
+If a phone or tablet can't open the Streaming URL:
+
+1. **Same network?** The device must be on the same Wi-Fi as the machine running JanFlix. Guest networks and wired-vs-wireless isolation sometimes block device-to-device traffic.
+2. **Multiple URLs printed?** If your machine has several network interfaces, try each printed URL — one of them is the Wi-Fi your phone is on.
+3. **Firewall prompt:** the first run may pop a "allow incoming connections" dialog for Node — click **Allow**. On Windows, allow Node.js through Windows Defender Firewall for private networks.
+4. **macOS local-network privacy** (Sequoia and later): if other devices can't connect, check *System Settings → Privacy & Security → Local Network* and make sure the terminal app (or Node) is allowed.
+5. **Router AP/client isolation:** some routers have "AP isolation" / "client isolation" enabled, which prevents devices from talking to each other. Turn it off in your router settings.
+6. **Wrong interface picked?** VPNs (utun, Tailscale, ZeroTier, etc.) and virtual adapters (Docker, VMware, VirtualBox) are excluded automatically, but if you're on a VPN the traffic may be routed through it — disconnect the VPN and restart JanFlix.
+
+A quick sanity check from another device: `ping <LAN-IP>` first, then open the URL in the browser.

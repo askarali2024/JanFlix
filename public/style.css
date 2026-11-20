@@ -513,6 +513,12 @@ body {
   letter-spacing: 0.3px;
   word-break: break-all;
 }
+.qr-alt {
+  margin: -8px 0 16px;
+  font-size: 12px;
+  color: var(--faint);
+  word-break: break-all;
+}
 
 /* ═══ Player ═══ */
 .player {

@@ -17,7 +17,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const express = require('express');
 const QRCode = require('qrcode');
 
@@ -309,30 +309,72 @@ app.get('/api/download/:id', (req, res) => {
 });
 
 /* LAN info + QR code so family can scan & watch on phones. */
-function lanUrl() {
-  const interfaces = os.networkInterfaces();
-  let ip = null;
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name] || []) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        ip = iface.address;
-        break;
-      }
+
+// Virtual / VPN / loopback-ish interfaces we never want to advertise.
+const SKIP_IFACE =
+  /^(lo|utun|tun|tap|gif|stf|awdl|llw|anpi|bridge|br-|vboxnet|vmnet|docker|veth|zt|tailscale|wg|tun0|ppp)/i;
+
+/**
+ * Detect every LAN-reachable IPv4 address, best candidate first.
+ * Prefers real Wi-Fi / Ethernet interfaces (en0, wlan0, eth0 …) over
+ * virtual adapters, and falls back to OS commands when Node's
+ * networkInterfaces() comes up empty.
+ */
+function getLanAddresses() {
+  const found = [];
+  for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
+    if (SKIP_IFACE.test(name)) continue;
+    for (const addr of addrs || []) {
+      const isV4 = addr.family === 'IPv4' || addr.family === 4;
+      if (!isV4 || addr.internal) continue;
+      if (addr.address.startsWith('169.254.')) continue; // link-local / not connected
+      found.push({ name, url: `http://${addr.address}:${PORT}` });
     }
-    if (ip) break;
   }
-  return `http://${ip || 'localhost'}:${PORT}`;
+
+  // Rank: primary Wi-Fi/Ethernet first (en0/wlan0/eth0), then any
+  // en*/wlan*/eth*/wlp*, then everything else.
+  const score = (n) =>
+    /^(en0|wlan0|eth0)$/i.test(n) ? 0 : /^(en|wlan|eth|wlp)/i.test(n) ? 1 : 2;
+  found.sort((a, b) => score(a.name) - score(b.name));
+
+  // Fallback for systems where networkInterfaces() reports nothing usable.
+  if (found.length === 0) {
+    try {
+      // macOS: ask the system for the primary (Wi-Fi) interface address.
+      const ip = execSync('ipconfig getifaddr en0', { timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString()
+        .trim();
+      if (/^\d+\.\d+\.\d+\.\d+$/.test(ip)) found.push({ name: 'en0', url: `http://${ip}:${PORT}` });
+    } catch { /* not macOS or no en0 */ }
+  }
+  if (found.length === 0) {
+    try {
+      // Linux: hostname -I lists all space-separated addresses.
+      const ips = execSync('hostname -I', { timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString()
+        .trim()
+        .split(/\s+/);
+      for (const ip of ips) {
+        if (/^\d+\.\d+\.\d+\.\d+$/.test(ip) && !ip.startsWith('127.')) {
+          found.push({ name: 'lan', url: `http://${ip}:${PORT}` });
+        }
+      }
+    } catch { /* not Linux */ }
+  }
+  return found;
 }
 
 app.get('/api/qr', async (req, res) => {
   try {
-    const url = lanUrl();
+    const lan = getLanAddresses();
+    const url = lan.length ? lan[0].url : `http://localhost:${PORT}`;
     const qr = await QRCode.toDataURL(url, {
       width: 320,
       margin: 2,
       color: { dark: '#0f111aff', light: '#ffffffff' },
     });
-    res.json({ url, qr });
+    res.json({ url, qr, all: lan.map((a) => a.url) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -352,10 +394,34 @@ app.get('*', (req, res) => {
  * Boot
  * ──────────────────────────────────────────────────────────────── */
 
-http.createServer(app).listen(PORT, () => {
+const server = http.createServer(app);
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[janflix] Port ${PORT} is already in use. Stop the other process or set PORT=<port> and retry.`);
+  } else {
+    console.error('[janflix] server failed to start:', err);
+  }
+  process.exit(1);
+});
+
+// Listening on ALL interfaces (0.0.0.0 + IPv6) so every device on the
+// same Wi-Fi / LAN can reach JanFlix.
+server.listen(PORT, () => {
+  const lan = getLanAddresses();
   console.log('');
   console.log('  ████ JanFlix ████');
-  console.log(`  Streaming:   ${lanUrl()}`);
+  if (lan.length === 0) {
+    console.log(`  Local:       http://localhost:${PORT}   (no LAN address detected — see README troubleshooting)`);
+  } else {
+    for (const a of lan) {
+      console.log(`  Streaming:   ${a.url}   (${a.name})`);
+    }
+    console.log(`  Local:       http://localhost:${PORT}`);
+    console.log('');
+    console.log('  Phones/tablets on the same Wi-Fi: open a "Streaming" URL above,');
+    console.log('  or press the QR button in the JanFlix header.');
+  }
   console.log(`  Library:    ${MEDIA_DIRS.join(', ')}`);
   console.log(`  Data:        ${DATA_DIR}`);
   console.log(`  Movies:      ${library.length}`);
